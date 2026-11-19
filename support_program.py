@@ -1,596 +1,643 @@
 """
-Support Program for Windows (PySide6)
-=========================================
+support program
+=============
+target platform : windows
+ui testing      : linux (audio level and devices are simulated, vkey presses are only logged)
 
-Installation:
-    pip install PySide6
-
-View the interface only (e.g. on Linux, no keys are sent):
-    python support_program.py --layout-test
+install (windows):  pip install pyside6 pycaw comtypes keyboard
+install (linux):    pip install pyside6
+run:                python support_program.py
 """
-
-import ctypes
+import math
 import random
-import string
 import sys
+import threading
 import time
-from ctypes import wintypes
 
-IS_WINDOWS = sys.platform == "win32"
-LAYOUT_TEST = "--layout-test" in sys.argv
-
-if not IS_WINDOWS and not LAYOUT_TEST:
-    sys.exit(
-        "This program only runs on Windows.\n"
-        "To view the layout only: python key_press_simulator.py --layout-test"
-    )
-
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QKeySequence, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QComboBox,
-    QDialog,
-    QFrame,
     QGridLayout,
-    QHBoxLayout,
+    QGroupBox,
     QLabel,
-    QMessageBox,
+    QLineEdit,
+    QPlainTextEdit,
+    QProgressBar,
     QPushButton,
+    QSlider,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-# ---------------------------------------------------------------------------
-# Windows API: key press via SendInput (scan code mode, also works in many
-# programs/games that ignore virtual key codes)
-# ---------------------------------------------------------------------------
-INPUT_KEYBOARD = 1
-KEYEVENTF_EXTENDEDKEY = 0x0001
-KEYEVENTF_KEYUP = 0x0002
-KEYEVENTF_SCANCODE = 0x0008
-
-VK_SHIFT = 0x10
-VK_CTRL = 0x11
-VK_ALT = 0x12
-
-ULONG_PTR = ctypes.c_size_t
-
-
-class MOUSEINPUT(ctypes.Structure):
-    _fields_ = [
-        ("dx", wintypes.LONG),
-        ("dy", wintypes.LONG),
-        ("mouseData", wintypes.DWORD),
-        ("dwFlags", wintypes.DWORD),
-        ("time", wintypes.DWORD),
-        ("dwExtraInfo", ULONG_PTR),
-    ]
-
-
-class KEYBDINPUT(ctypes.Structure):
-    _fields_ = [
-        ("wVk", wintypes.WORD),
-        ("wScan", wintypes.WORD),
-        ("dwFlags", wintypes.DWORD),
-        ("time", wintypes.DWORD),
-        ("dwExtraInfo", ULONG_PTR),
-    ]
-
-
-class HARDWAREINPUT(ctypes.Structure):
-    _fields_ = [
-        ("uMsg", wintypes.DWORD),
-        ("wParamL", wintypes.WORD),
-        ("wParamH", wintypes.WORD),
-    ]
-
-
-class _INPUTUNION(ctypes.Union):
-    _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT), ("hi", HARDWAREINPUT)]
-
-
-class INPUT(ctypes.Structure):
-    _anonymous_ = ("u",)
-    _fields_ = [("type", wintypes.DWORD), ("u", _INPUTUNION)]
-
+IS_WINDOWS = sys.platform.startswith("win")
 
 if IS_WINDOWS:
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
-    user32.SendInput.restype = wintypes.UINT
-    user32.MapVirtualKeyW.argtypes = (wintypes.UINT, wintypes.UINT)
-    user32.MapVirtualKeyW.restype = wintypes.UINT
-    user32.GetAsyncKeyState.argtypes = (ctypes.c_int,)
-    user32.GetAsyncKeyState.restype = ctypes.c_short
-else:
-    user32 = None
+    import comtypes
+    import keyboard
+    from ctypes import POINTER, cast
+    from comtypes import CLSCTX_ALL
+    from pycaw.api.mmdeviceapi import IMMDeviceEnumerator
+    from pycaw.constants import CLSID_MMDeviceEnumerator, DEVICE_STATE, EDataFlow
+    from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
 
 
-def send_key(vk: int, extended: bool, down: bool) -> None:
-    if user32 is None:
-        return
+# --------------------------------------------------------------------------
+# Level meters
+# --------------------------------------------------------------------------
+class WindowsMeter:
+    def __init__(self):
+        self.meter = None
+        self.device_id = None
+        self._last_retry = 0.0
+        self._connect()
 
-    scan = user32.MapVirtualKeyW(vk, 0)
-    flags = KEYEVENTF_SCANCODE
-    if extended:
-        flags |= KEYEVENTF_EXTENDEDKEY
-    if not down:
-        flags |= KEYEVENTF_KEYUP
-    inp = INPUT()
-    inp.type = INPUT_KEYBOARD
-    inp.ki.wVk = 0
-    inp.ki.wScan = scan
-    inp.ki.dwFlags = flags
-    inp.ki.time = 0
-    inp.ki.dwExtraInfo = 0
-    user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+    @staticmethod
+    def _enumerator():
+        return comtypes.CoCreateInstance(
+            CLSID_MMDeviceEnumerator,
+            IMMDeviceEnumerator,
+            comtypes.CLSCTX_INPROC_SERVER,
+        )
+
+    @classmethod
+    def list_devices(cls):
+        names = {}
+        try:
+            for d in AudioUtilities.GetAllDevices():
+                names[d.id] = d.FriendlyName
+        except Exception:
+            pass
+        result = []
+        coll = cls._enumerator().EnumAudioEndpoints(
+            EDataFlow.eRender.value, DEVICE_STATE.ACTIVE.value
+        )
+        for i in range(coll.GetCount()):
+            dev = coll.Item(i)
+            dev_id = dev.GetId()
+            result.append((dev_id, names.get(dev_id, dev_id)))
+        return result
+
+    def select(self, device_id):
+        self.device_id = device_id
+        self._connect()
+
+    def _connect(self):
+        if self.device_id is None:
+            dev = AudioUtilities.GetSpeakers()
+            if hasattr(dev, "_dev"):  # newer pycaw versions wrap the COM object
+                dev = dev._dev
+        else:
+            dev = self._enumerator().GetDevice(self.device_id)
+        iface = dev.Activate(IAudioMeterInformation._iid_, CLSCTX_ALL, None)
+        self.meter = cast(iface, POINTER(IAudioMeterInformation))
+
+    def level(self) -> int:
+        try:
+            return int(round(self.meter.GetPeakValue() * 100))
+        except Exception:
+            # device removed/changed -> try to reconnect (at most once a second)
+            now = time.monotonic()
+            if now - self._last_retry > 1.0:
+                self._last_retry = now
+                try:
+                    self._connect()
+                except Exception:
+                    pass
+            return 0
 
 
-def is_key_down(vk: int) -> bool:
-    if user32 is None:
-        return False
+class SimulatedMeter:
+    def __init__(self):
+        self.device_id = None
+        self._t0 = time.monotonic()
 
-    return bool(user32.GetAsyncKeyState(vk) & 0x8000)
+    @staticmethod
+    def list_devices():
+        return [("sim1", "simulated speakers"), ("sim2", "simulated headphones")]
+
+    def select(self, device_id):
+        self.device_id = device_id
+
+    def level(self) -> int:
+        t = time.monotonic() - self._t0
+        phase = 0.0 if self.device_id != "sim2" else 1.5
+        v = 50 + 50 * math.sin(t * 1.2 + phase) + random.uniform(-5, 5)
+        return max(0, min(100, int(v)))
 
 
-def mods_down():
-    return (is_key_down(VK_CTRL), is_key_down(VK_SHIFT), is_key_down(VK_ALT))
+# --------------------------------------------------------------------------
+# Keys
+# --------------------------------------------------------------------------
+def press_key(name: str, log):
+    if IS_WINDOWS:
+        keyboard.press_and_release(name)
+    else:
+        log(f"[simulated] key press: {name}")
 
 
-def format_combo(name: str, ctrl: bool, shift: bool, alt: bool) -> str:
+MODIFIER_KEYS = (Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta, Qt.Key_AltGr)
+
+
+def key_event_to_name(event):
+    if event.key() in MODIFIER_KEYS or event.key() == Qt.Key_unknown:
+        return None
     parts = []
-    if ctrl:
-        parts.append("Ctrl")
-    if shift:
-        parts.append("Shift")
-    if alt:
-        parts.append("Alt")
-    parts.append(name)
+    mods = event.modifiers()
+    if mods & Qt.ControlModifier:
+        parts.append("ctrl")
+    if mods & Qt.AltModifier:
+        parts.append("alt")
+    if mods & Qt.ShiftModifier:
+        parts.append("shift")
+    key = QKeySequence(event.key()).toString().lower()
+    if not key:
+        return None
+    parts.append(key)
     return "+".join(parts)
 
 
-# ---------------------------------------------------------------------------
-# Key tables
-#   KEYS:       display name -> (virtual key code, extended key?)
-#   QT_TO_NAME: Qt key code -> display name (for "Record key")
-#   VK_TO_NAME: virtual key code -> display name (only used on Windows, so that
-#               e.g. Shift+1 is recognized as "1")
-# ---------------------------------------------------------------------------
-KEYS = {}
-for _c in string.ascii_uppercase + string.digits:
-    KEYS[_c] = (ord(_c), False)
-for _i in range(1, 13):
-    KEYS[f"F{_i}"] = (0x6F + _i, False)
-KEYS.update(
-    {
-        "Space": (0x20, False),
-        "Enter": (0x0D, False),
-        "Tab": (0x09, False),
-        "Esc": (0x1B, False),
-        "Backspace": (0x08, False),
-        "Up Arrow": (0x26, True),
-        "Down Arrow": (0x28, True),
-        "Left Arrow": (0x25, True),
-        "Right Arrow": (0x27, True),
-        "Insert": (0x2D, True),
-        "Delete": (0x2E, True),
-        "Home": (0x24, True),
-        "End": (0x23, True),
-        "Page Up": (0x21, True),
-        "Page Down": (0x22, True),
-    }
-)
+# --------------------------------------------------------------------------
+# Thread -> GUI signals
+# --------------------------------------------------------------------------
+class LevelBar(QProgressBar):
+    def __init__(self):
+        super().__init__()
+        self.threshold = 0
 
-VK_TO_NAME = {vk: name for name, (vk, _ext) in KEYS.items()}
+    def set_threshold(self, value):
+        self.threshold = value
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        w = self.width()
+        x = 1 + round(self.threshold / 100.0 * (w - 2))
+        x = max(1, min(w - 2, x))
+        p = QPainter(self)
+        pen = QPen(QColor("#ff3030"))
+        pen.setWidth(2)
+        p.setPen(pen)
+        p.drawLine(x, 1, x, self.height() - 2)
+        p.end()
+
+class Bridge(QObject):
+    toggle_requested = Signal()
+    key_captured = Signal(str, str)  # (target, key name)
+    sequence_done = Signal()
+    log = Signal(str)
 
 
-def build_qt_map() -> dict:
-    k = Qt.Key
-    m = {
-        int(k.Key_Space): "Space",
-        int(k.Key_Return): "Enter",
-        int(k.Key_Enter): "Enter",
-        int(k.Key_Tab): "Tab",
-        int(k.Key_Escape): "Esc",
-        int(k.Key_Backspace): "Backspace",
-        int(k.Key_Up): "Up Arrow",
-        int(k.Key_Down): "Down Arrow",
-        int(k.Key_Left): "Left Arrow",
-        int(k.Key_Right): "Right Arrow",
-        int(k.Key_Insert): "Insert",
-        int(k.Key_Delete): "Delete",
-        int(k.Key_Home): "Home",
-        int(k.Key_End): "End",
-        int(k.Key_PageUp): "Page Up",
-        int(k.Key_PageDown): "Page Down",
-    }
-    for i, c in enumerate(string.ascii_uppercase):
-        m[int(k.Key_A) + i] = c
-    for i, c in enumerate(string.digits):
-        m[int(k.Key_0) + i] = c
-    for i in range(1, 13):
-        m[int(k.Key_F1) + i - 1] = f"F{i}"
-    return m
-
-
-QT_TO_NAME = build_qt_map()
-
-DEFAULT_KEY = "Ö"
-DEFAULT_HOTKEY = "F12"
-DEFAULT_INTERVAL_MS = 1000
-DEFAULT_VARIANCE_MS = 500
-MAX_MS = 86_400_000    # 24 hours
-MIN_INTERVAL_MS = 100  # smallest selectable interval
-MIN_DELAY_MS = 50      # smallest actual delay (including variance)
-HOLD_MS = 50           # how long the key is held down
-HOLD_VARIANCE_MS = 25
-
-
-# ---------------------------------------------------------------------------
-# Dialog for recording a key (also remembers Ctrl/Shift/Alt)
-#   validator(name, ctrl, shift, alt) -> error text or None
-# ---------------------------------------------------------------------------
-class CaptureDialog(QDialog):
-    def __init__(self, title: str, validator, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.setModal(True)
-        self.name = None
-        self.ctrl = self.shift = self.alt = False
-        self.validator = validator
-
-        layout = QVBoxLayout(self)
-        self.label = QLabel("Press the desired key now\n(also with Ctrl / Shift / Alt) …")
-        self.label.setAlignment(Qt.AlignCenter)
-        self.label.setMinimumSize(340, 80)
-        layout.addWidget(self.label)
-
-        cancel = QPushButton("Cancel")
-        cancel.setFocusPolicy(Qt.NoFocus)
-        cancel.clicked.connect(self.reject)
-        layout.addWidget(cancel)
-
-    def keyPressEvent(self, event):
-        if event.isAutoRepeat():
-            return
-        name = None
-        if IS_WINDOWS:
-            name = VK_TO_NAME.get(event.nativeVirtualKey())
-        if name is None:
-            name = QT_TO_NAME.get(int(event.key()))
-        if name is None:
-            self.label.setText("This key is not supported.\nPlease press another key.")
-            return
-        mods = event.modifiers()
-        ctrl = bool(mods & Qt.ControlModifier)
-        shift = bool(mods & Qt.ShiftModifier)
-        alt = bool(mods & Qt.AltModifier)
-        error = self.validator(name, ctrl, shift, alt)
-        if error:
-            self.label.setText(f"{error}\nPlease press another key.")
-            return
-        self.name, self.ctrl, self.shift, self.alt = name, ctrl, shift, alt
-        self.accept()
-
-
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 # Main window
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Support Program" + ("" if IS_WINDOWS else " (Layout Test)"))
+        self.setWindowTitle("support program")
+        self.setMinimumWidth(500)
 
-        self.running = False
-        self.count = 0
-        self.next_time = 0.0
-        self.pressed = []
-        self.cur_sequence = []
-        self.interval = DEFAULT_INTERVAL_MS
-        self.variance = DEFAULT_VARIANCE_MS
-        self.hotkey_was_down = False
+        self.meter = WindowsMeter() if IS_WINDOWS else SimulatedMeter()
+        self.bridge = Bridge()
+        self.bridge.toggle_requested.connect(self.toggle_monitoring)
+        self.bridge.key_captured.connect(self._on_key_captured)
+        self.bridge.log.connect(self._append_log)
 
-        self.fire_timer = QTimer(self, singleShot=True)
-        self.fire_timer.timeout.connect(self._fire)
-        self.release_timer = QTimer(self, singleShot=True)
-        self.release_timer.timeout.connect(self._release_key)
-        self.tick_timer = QTimer(self)
-        self.tick_timer.setInterval(100)
-        self.tick_timer.timeout.connect(self._tick)
-        self.hotkey_timer = QTimer(self)
-        self.hotkey_timer.setInterval(50)
-        self.hotkey_timer.timeout.connect(self._poll_hotkey)
+        self.monitoring = False
+        self.sequence_running = False
+        self.press_key2 = False
+        self.capture_target = None
+        self.toggle_hotkey_handle = None
 
         self._build_ui()
-        self._on_hotkey_changed()
-        self.hotkey_timer.start()
+        self._refresh_devices()
+        self._register_toggle_hotkey()
+
+        self.timer = QTimer(self)
+        self.timer.setInterval(50)
+        self.timer.timeout.connect(self._poll)
+        self.timer.start()
+
+        self.timer_key1 = QTimer(self)
+        self.timer_key1.setSingleShot(True)
+        self.timer_key1.timeout.connect(self._press_key1)
+
+        self.timer_key1_2nd = QTimer(self)
+        self.timer_key1_2nd.setSingleShot(True)
+        self.timer_key1_2nd.timeout.connect(self._press_key1_2nd)
+
+        self.timer_key2 = QTimer(self)
+        self.timer_key2.setSingleShot(True)
+        self.timer_key2.timeout.connect(self._press_key2)
+
+        self.timer_key2_press = QTimer(self)
+        self.timer_key2_press.setSingleShot(True)
+        self.timer_key2_press.timeout.connect(self._press_key2_press)
+
+        self.timer_key2_wait = QTimer(self)
+        self.timer_key2_wait.setSingleShot(True)
+        self.timer_key2_wait.timeout.connect(self._press_key2_wait)
+
+        if not IS_WINDOWS:
+            self._append_log("test mode (non-windows): devices and audio level are simulated, key presses are only logged, global hotkey is disabled.")
 
     # ------------------------------------------------------------------ UI
-    def _make_mod_row(self, grid, row: int, label: str):
-        grid.addWidget(QLabel(label), row, 0)
-        layout = QHBoxLayout()
-        boxes = (QCheckBox("Ctrl"), QCheckBox("Shift"), QCheckBox("Alt"))
-        for cb in boxes:
-            layout.addWidget(cb)
-        layout.addStretch(1)
-        grid.addLayout(layout, row, 1, 1, 2)
-        return boxes
-
     def _build_ui(self):
-        grid = QGridLayout(self)
-        grid.setContentsMargins(16, 16, 16, 16)
-        grid.setVerticalSpacing(10)
-        grid.setHorizontalSpacing(12)
+        layout = QVBoxLayout(self)
 
-        # --- simulated key ---
-        grid.addWidget(QLabel("Key:"), 0, 0)
-        self.key_box = QComboBox()
-        self.key_box.addItems(list(KEYS))
-        self.key_box.setCurrentText(DEFAULT_KEY)
-        grid.addWidget(self.key_box, 0, 1)
-        self.capture_btn = QPushButton("Record key")
-        self.capture_btn.clicked.connect(self.capture_key)
-        grid.addWidget(self.capture_btn, 0, 2)
+        # sound
+        box_devices = QGroupBox("sound")
+        grid_devices = QGridLayout(box_devices)
 
-        self.ctrl_check, self.shift_check, self.alt_check = self._make_mod_row(grid, 1, "Modifiers:")
+        lbl_device = QLabel("device")
+        lbl_device.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        grid_devices.addWidget(lbl_device, 0, 0, 1, 2)
 
-        # --- timing ---
-        grid.addWidget(QLabel("Interval:"), 2, 0)
-        self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(MIN_INTERVAL_MS, MAX_MS)
-        self.interval_spin.setSingleStep(100)
-        self.interval_spin.setSuffix(" ms")
-        self.interval_spin.setValue(DEFAULT_INTERVAL_MS)
-        grid.addWidget(self.interval_spin, 2, 1)
+        self.device_list = QComboBox()
+        self.device_list.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.device_list.setMinimumContentsLength(30)
+        self.device_list.currentIndexChanged.connect(self._on_device_changed)
+        grid_devices.addWidget(self.device_list, 1, 0)
 
-        grid.addWidget(QLabel("Variance ±:"), 3, 0)
-        self.variance_spin = QSpinBox()
-        self.variance_spin.setRange(0, MAX_MS)
-        self.variance_spin.setSingleStep(100)
-        self.variance_spin.setSuffix(" ms")
-        self.variance_spin.setValue(DEFAULT_VARIANCE_MS)
-        grid.addWidget(self.variance_spin, 3, 1)
+        self.btn_refresh = QPushButton("refresh")
+        self.btn_refresh.clicked.connect(self._refresh_devices)
+        grid_devices.addWidget(self.btn_refresh, 1, 1)
 
-        # --- start/stop hotkey ---
-        grid.addWidget(QLabel("Start/Stop hotkey:"), 4, 0)
-        self.hotkey_box = QComboBox()
-        self.hotkey_box.addItems(list(KEYS))
-        self.hotkey_box.setCurrentText(DEFAULT_HOTKEY)
-        grid.addWidget(self.hotkey_box, 4, 1)
-        self.hotkey_capture_btn = QPushButton("Record hotkey")
-        self.hotkey_capture_btn.clicked.connect(self.capture_hotkey)
-        grid.addWidget(self.hotkey_capture_btn, 4, 2)
+        lbl_level = QLabel("level")
+        lbl_level.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        grid_devices.addWidget(lbl_level, 2, 0, 1, 2)
 
-        self.hk_ctrl_check, self.hk_shift_check, self.hk_alt_check = self._make_mod_row(
-            grid, 5, "Hotkey modifiers:"
+        self.volume_bar = LevelBar()
+        self.volume_bar.setRange(0, 100)
+        self.volume_bar.setFormat("%v")
+        grid_devices.addWidget(self.volume_bar, 3, 0, 1, 2)
+
+        lbl_threshold = QLabel("threshold")
+        lbl_threshold.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        grid_devices.addWidget(lbl_threshold, 4, 0, 1, 2)
+
+        self.threshold_slider = QSlider(Qt.Horizontal)
+        self.threshold_slider.setRange(0, 100)
+        self.threshold_slider.setValue(50)
+        grid_devices.addWidget(self.threshold_slider, 5, 0)
+
+        self.threshold_spin = self._spin(50, 0, 100, 1, "%")
+        grid_devices.addWidget(self.threshold_spin, 5, 1)
+
+        self.threshold_slider.valueChanged.connect(self.threshold_spin.setValue)
+        self.threshold_spin.valueChanged.connect(self.threshold_slider.setValue)
+        self.threshold_spin.valueChanged.connect(self._update_bar_style)
+
+        layout.addWidget(box_devices)
+
+        # keys
+        box_keys = QGroupBox("keys (modifiers like ctrl+alt+shift are supported)")
+        grid_keys = QGridLayout(box_keys)
+
+        lbl_key1 = QLabel("key1")
+        lbl_key1.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        grid_keys.addWidget(lbl_key1, 0, 0)
+
+        self.key1 = QLineEdit("g")
+        grid_keys.addWidget(self.key1, 0, 1)
+
+        self.btn_rec_key1 = QPushButton("record")
+        self.btn_rec_key1.clicked.connect(lambda: self._capture_key("key1"))
+        grid_keys.addWidget(self.btn_rec_key1, 0, 2)
+
+        lbl_key2 = QLabel("key2")
+        lbl_key2.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        grid_keys.addWidget(lbl_key2, 1, 0)
+
+        self.key2 = QLineEdit("f")
+        grid_keys.addWidget(self.key2, 1, 1)
+
+        self.btn_rec_key2 = QPushButton("record")
+        self.btn_rec_key2.clicked.connect(lambda: self._capture_key("key2"))
+        grid_keys.addWidget(self.btn_rec_key2, 1, 2)
+
+        lbl_toggle = QLabel("start / stop")
+        lbl_toggle.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        grid_keys.addWidget(lbl_toggle, 2, 0)
+
+        self.toggle = QLineEdit("ctrl+alt+s")
+        self.toggle.editingFinished.connect(self._register_toggle_hotkey)
+        grid_keys.addWidget(self.toggle, 2, 1)
+
+        self.btn_rec_toggle = QPushButton("record")
+        self.btn_rec_toggle.clicked.connect(lambda: self._capture_key("toggle"))
+        grid_keys.addWidget(self.btn_rec_toggle, 2, 2)
+
+        layout.addWidget(box_keys)
+
+        # timing
+        box_time = QGroupBox("timing (ms)")
+        grid_time = QGridLayout(box_time)
+
+        lbl_delay1 = QLabel("key1 delay")
+        lbl_delay1.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        grid_time.addWidget(lbl_delay1, 0, 0)
+
+        lbl_delaymin1 = QLabel("min")
+        lbl_delaymin1.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        grid_time.addWidget(lbl_delaymin1, 0, 1)
+
+        self.delay_key1_min = self._spin(25, 10, 60000, 5, "ms")
+        grid_time.addWidget(self.delay_key1_min, 0, 2)
+
+        lbl_delaymax1 = QLabel("max")
+        lbl_delaymax1.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        grid_time.addWidget(lbl_delaymax1, 0, 3)
+
+        self.delay_key1_max = self._spin(150, 10, 60000, 5, "ms")
+        grid_time.addWidget(self.delay_key1_max, 0, 4)
+
+        lbl_delay1_2nd = QLabel("key1 (second press) delay")
+        lbl_delay1_2nd.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        grid_time.addWidget(lbl_delay1_2nd, 1, 0)
+
+        lbl_delaymin1_2nd = QLabel("min")
+        lbl_delaymin1_2nd.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        grid_time.addWidget(lbl_delaymin1_2nd, 1, 1)
+
+        self.delay_key1_2nd_min = self._spin(500, 500, 60000, 100, "ms")
+        grid_time.addWidget(self.delay_key1_2nd_min, 1, 2)
+
+        lbl_delaymax1_2nd = QLabel("max")
+        lbl_delaymax1_2nd.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        grid_time.addWidget(lbl_delaymax1_2nd, 1, 3)
+
+        self.delay_key1_2nd_max = self._spin(1500, 500, 60000, 100, "ms")
+        grid_time.addWidget(self.delay_key1_2nd_max, 1, 4)
+
+        lbl_delay2 = QLabel("key2 delay")
+        lbl_delay2.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        grid_time.addWidget(lbl_delay2, 2, 0)
+
+        lbl_delaymin2 = QLabel("min")
+        lbl_delaymin2.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        grid_time.addWidget(lbl_delaymin2, 2, 1)
+
+        self.delay_key2_min = self._spin(390, 360, 2400, 10, "s")
+        grid_time.addWidget(self.delay_key2_min, 2, 2)
+
+        lbl_delaymax2 = QLabel("max")
+        lbl_delaymax2.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        grid_time.addWidget(lbl_delaymax2, 2, 3)
+
+        self.delay_key2_max = self._spin(660, 360, 2400, 10, "s")
+        grid_time.addWidget(self.delay_key2_max, 2, 4)
+
+        layout.addWidget(box_time)
+
+        # Control
+        self.btn_start = QPushButton("start")
+        self.btn_start.clicked.connect(self.toggle_monitoring)
+        
+        layout.addWidget(self.btn_start)
+
+        # Log
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMinimumHeight(110)
+
+        layout.addWidget(self.log_view, 1)
+
+        self._update_bar_style()
+
+    @staticmethod
+    def _spin(value, min, max, step, suffix):
+        s = QSpinBox()
+        s.setRange(min, max)
+        s.setSingleStep(step)
+        s.setSuffix(suffix)
+        s.setValue(value)
+        return s
+
+    def _update_bar_style(self):
+        self.volume_bar.setStyleSheet(
+            "QProgressBar { border: 1px solid #555; border-radius: 3px;"
+            " text-align: center; background: #222; }"
+            "QProgressBar::chunk { background-color: #3a3; }"
         )
-        self.hotkey_box.currentTextChanged.connect(self._on_hotkey_changed)
-        for cb in (self.hk_ctrl_check, self.hk_shift_check, self.hk_alt_check):
-            cb.toggled.connect(self._on_hotkey_changed)
+        self.volume_bar.set_threshold(self.threshold_spin.value())
 
-        hint = QLabel(
-            "Example: interval 5000 ms, variance 1000 ms →\n"
-            "key press every 4000–6000 ms (random)."
-        )
-        hint.setStyleSheet("color: gray;")
-        grid.addWidget(hint, 6, 0, 1, 3)
+    def _append_log(self, text):
+        self.log_view.appendPlainText(f"{time.strftime('%H:%M:%S')}  {text}")
 
-        self.toggle_btn = QPushButton("Start")
-        self.toggle_btn.setMinimumHeight(40)
-        self.toggle_btn.clicked.connect(self.toggle)
-        grid.addWidget(self.toggle_btn, 7, 0, 1, 3)
+    # -------------------------------------------------------------- devices
+    def _refresh_devices(self):
+        previous = self.device_list.currentData()
+        self.device_list.blockSignals(True)
+        self.device_list.clear()
+        self.device_list.addItem("Default output device", None)
+        try:
+            for dev_id, name in self.meter.list_devices():
+                self.device_list.addItem(name, dev_id)
+        except Exception as e:
+            self._append_log(f"Could not list output devices: {e}")
+        idx = self.device_list.findData(previous)
+        self.device_list.setCurrentIndex(idx if idx >= 0 else 0)
+        self.device_list.blockSignals(False)
+        self._on_device_changed()
 
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        grid.addWidget(line, 8, 0, 1, 3)
+    def _on_device_changed(self, *_):
+        dev_id = self.device_list.currentData()
+        try:
+            self.meter.select(dev_id)
+            self._append_log(f"observing: {self.device_list.currentText()}")
+        except Exception as e:
+            self._append_log(f"could not open device: {e}")
 
-        self.status_label = QLabel("Ready.")
-        self.countdown_label = QLabel("")
-        self.count_label = QLabel("Key presses: 0")
-        grid.addWidget(self.status_label, 9, 0, 1, 3)
-        grid.addWidget(self.countdown_label, 10, 0, 1, 3)
-        grid.addWidget(self.count_label, 11, 0, 1, 3)
+    # -------------------------------------------------------- key selection
+    def _capture_key(self, target):
+        btn = {
+            "key1": self.btn_rec_key1,
+            "key2": self.btn_rec_key2,
+            "toggle": self.btn_rec_toggle,
+        }[target]
+        btn.setText("Press a key...")
+        btn.setEnabled(False)
 
-        grid.setColumnStretch(1, 1)
-        self.setFixedSize(self.sizeHint().expandedTo(self.minimumSizeHint()))
+        if IS_WINDOWS:
+            def worker():
+                name = keyboard.read_hotkey(suppress=False)
+                self.bridge.key_captured.emit(target, name)
 
-    def _set_inputs_enabled(self, enabled: bool):
-        for w in (
-            self.key_box,
-            self.capture_btn,
-            self.ctrl_check,
-            self.shift_check,
-            self.alt_check,
-            self.interval_spin,
-            self.variance_spin,
-            self.hotkey_box,
-            self.hotkey_capture_btn,
-            self.hk_ctrl_check,
-            self.hk_shift_check,
-            self.hk_alt_check,
-        ):
-            w.setEnabled(enabled)
-
-    # ------------------------------------------- current settings
-    def _key_mods(self):
-        return (
-            self.ctrl_check.isChecked(),
-            self.shift_check.isChecked(),
-            self.alt_check.isChecked(),
-        )
-
-    def _hotkey_mods(self):
-        return (
-            self.hk_ctrl_check.isChecked(),
-            self.hk_shift_check.isChecked(),
-            self.hk_alt_check.isChecked(),
-        )
-
-    def _key_text(self) -> str:
-        return format_combo(self.key_box.currentText(), *self._key_mods())
-
-    def _hotkey_text(self) -> str:
-        return format_combo(self.hotkey_box.currentText(), *self._hotkey_mods())
-
-    # ---------------------------------------------- recording keys
-    def capture_key(self):
-        if self.running:
-            return
-
-        def validator(name, ctrl, shift, alt):
-            if name == self.hotkey_box.currentText() and (ctrl, shift, alt) == self._hotkey_mods():
-                return "This combination is set as the Start/Stop hotkey."
-            return None
-
-        dlg = CaptureDialog("Record key", validator, self)
-        if dlg.exec() == QDialog.Accepted and dlg.name:
-            self.key_box.setCurrentText(dlg.name)
-            self.ctrl_check.setChecked(dlg.ctrl)
-            self.shift_check.setChecked(dlg.shift)
-            self.alt_check.setChecked(dlg.alt)
-            self.status_label.setText(f"Key “{self._key_text()}” applied.")
-
-    def capture_hotkey(self):
-        if self.running:
-            return
-
-        def validator(name, ctrl, shift, alt):
-            if name == self.key_box.currentText() and (ctrl, shift, alt) == self._key_mods():
-                return "This combination is already being simulated."
-            return None
-
-        dlg = CaptureDialog("Record hotkey", validator, self)
-        if dlg.exec() == QDialog.Accepted and dlg.name:
-            self.hotkey_box.setCurrentText(dlg.name)
-            self.hk_ctrl_check.setChecked(dlg.ctrl)
-            self.hk_shift_check.setChecked(dlg.shift)
-            self.hk_alt_check.setChecked(dlg.alt)
-            self.status_label.setText(f"Hotkey “{self._hotkey_text()}” applied.")
-
-    def _on_hotkey_changed(self, *_):
-        # Remember the state of the new key so that a hotkey that is still held
-        # down (e.g. from recording) does not immediately trigger Start/Stop.
-        vk = KEYS[self.hotkey_box.currentText()][0]
-        self.hotkey_was_down = is_key_down(vk)
-
-    # ------------------------------------------------------ Start / Stop
-    def toggle(self):
-        if self.running:
-            self.stop()
+            threading.Thread(target=worker, daemon=True).start()
         else:
-            self.start()
+            self.capture_target = target
+            self.setFocus()
 
-    def start(self):
-        name = self.key_box.currentText()
-        hotkey = self.hotkey_box.currentText()
-        if name not in KEYS or hotkey not in KEYS:
-            QMessageBox.critical(self, "Invalid input", "Please select a valid key.")
+    def keyPressEvent(self, event):
+        if self.capture_target is not None:
+            name = key_event_to_name(event)
+            if name:
+                target, self.capture_target = self.capture_target, None
+                self.bridge.key_captured.emit(target, name)
             return
-        if name == hotkey and self._key_mods() == self._hotkey_mods():
-            QMessageBox.critical(
-                self,
-                "Invalid input",
-                "The simulated key combination and the Start/Stop hotkey must not be identical.",
-            )
+        super().keyPressEvent(event)
+
+    def _on_key_captured(self, target, name):
+        if target == "key1":
+            self.key1.setText(name)
+            self.btn_rec_key1.setText("Record")
+            self.btn_rec_key1.setEnabled(True)
+        elif target == "key2":
+            self.key2.setText(name)
+            self.btn_rec_key2.setText("Record")
+            self.btn_rec_key2.setEnabled(True)
+        else:
+            self.toggle.setText(name)
+            self.btn_rec_toggle.setText("Record")
+            self.btn_rec_toggle.setEnabled(True)
+            self._register_toggle_hotkey()
+
+    def _register_toggle_hotkey(self):
+        if not IS_WINDOWS:
+            return
+        if self.toggle_hotkey_handle is not None:
+            try:
+                keyboard.remove_hotkey(self.toggle_hotkey_handle)
+            except Exception:
+                pass
+            self.toggle_hotkey_handle = None
+        key = self.toggle_key.text().strip().lower()
+        if not key:
+            return
+        try:
+            self.toggle_hotkey_handle = keyboard.add_hotkey(key, lambda: self.bridge.toggle_requested.emit())
+        except Exception as e:
+            self._append_log(f"invalid start/stop hotkey: {e}")
+
+    # ------------------------------------------------------------ monitoring
+    def toggle_monitoring(self):
+        self.monitoring = not self.monitoring
+
+        if self.monitoring:
+            self.btn_start.setText("stop")
+            self._append_log("monitoring started")
+            self._schedule_key2()
+        else:
+            self.sequence_running = False
+            self.press_key2 = False
+            self.timer_key1.stop()
+            self.timer_key1_2nd.stop()
+            self.timer_key2.stop()
+            self.btn_start.setText("start")
+            self._append_log("monitoring stopped")
+
+    def _poll(self):
+        level = self.meter.level()
+        self.volume_bar.setValue(level)
+
+        if not self.monitoring:
+            return
+        
+        if not self.sequence_running and level >= self.threshold_spin.value():
+            self._append_log(f"threshold reached")
+            self.sequence_running = True
+            self._schedule_key1()
+
+    def _schedule_key1(self):
+        lo, hi = sorted((self.delay_key1_min.value(), self.delay_key1_max.value()))
+        self.timer_key1.start(int(random.uniform(lo, hi)))
+
+    def _schedule_key1_2nd(self):
+        lo, hi = sorted((self.delay_key1_2nd_min.value(), self.delay_key1_2nd_max.value()))
+        self.timer_key1_2nd.start(int(random.uniform(lo, hi)))
+
+    def _schedule_key2(self):
+        lo, hi = sorted((self.delay_key2_min.value(), self.delay_key2_max.value()))
+        self.timer_key2.start(int(random.uniform(lo, hi)) * 1000)
+
+    def _schedule_key2_press(self):
+        self.timer_key2_press.start(int(random.uniform(500, 700)))
+
+    def _schedule_key2_wait(self):
+        self._schedule_key2()
+        self.press_key2 = False
+        self.timer_key2_wait.start(int(random.uniform(2000, 2300)))
+
+    def _press_key1(self):
+        if not self.monitoring:
+            return
+        
+        if not self.sequence_running:
             return
 
-        # Press order: modifiers first, then the actual key
-        ctrl, shift, alt = self._key_mods()
-        sequence = []
-        if ctrl:
-            sequence.append((VK_CTRL, False))
-        if shift:
-            sequence.append((VK_SHIFT, False))
-        if alt:
-            sequence.append((VK_ALT, False))
-        sequence.append(KEYS[name])
-
-        self.cur_sequence = sequence
-        self.interval = self.interval_spin.value()
-        self.variance = self.variance_spin.value()
-
-        self.running = True
-        self.count = 0
-        self.count_label.setText("Key presses: 0")
-        self._set_inputs_enabled(False)
-        self.toggle_btn.setText("Stop")
-        low = max(MIN_DELAY_MS, self.interval - self.variance)
-        high = self.interval + self.variance
-        self.status_label.setText(
-            f"Running – “{self._key_text()}”, every {low}–{high} ms. Stop with {self._hotkey_text()}."
-        )
-        self._schedule_next()
-        self.tick_timer.start()
-        self._tick()
-
-    def stop(self):
-        self.running = False
-        self.fire_timer.stop()
-        self.release_timer.stop()
-        self.tick_timer.stop()
-        self._release_key()
-        self._set_inputs_enabled(True)
-        self.toggle_btn.setText("Start")
-        self.status_label.setText("Stopped.")
-        self.countdown_label.setText("")
-
-    # ------------------------------------------------------------ Sequence
-    def _schedule_next(self):
-        low = max(MIN_DELAY_MS, self.interval - self.variance)
-        high = max(low, self.interval + self.variance)
-        delay = random.randint(low, high)
-        self.next_time = time.monotonic() + delay / 1000.0
-        self.fire_timer.start(delay)
-
-    def _fire(self):
-        if not self.running:
+        if self.press_key2:
+            self._schedule_key2_press()
+        else:
+            self._schedule_key1_2nd()
+        
+        key = self.key1.text().strip().lower()
+        if not key:
             return
-        self._release_key()  # safety net: never leave a key stuck
-        for vk, ext in self.cur_sequence:
-            send_key(vk, ext, True)
-            self.pressed.append((vk, ext))
-        release_delay = random.randint(HOLD_MS-HOLD_VARIANCE_MS, HOLD_MS+HOLD_VARIANCE_MS)
-        self.release_timer.start(release_delay)
-        self.count += 1
-        self.count_label.setText(f"Key presses: {self.count}")
-        self._schedule_next()
+        
+        try:
+            press_key(key, self._append_log)
+            self._append_log(f"key1 pressed: {key}")
+        except Exception as e:
+            self._append_log(f"key1 press error: {e}")
 
-    def _release_key(self):
-        # release in reverse order: the key first, then the modifiers
-        for vk, ext in reversed(self.pressed):
-            send_key(vk, ext, False)
-        self.pressed = []
+    def _press_key1_2nd(self):
+        if not self.monitoring:
+            return
+        
+        if not self.sequence_running:
+            return
 
-    def _tick(self):
-        remaining = max(0.0, self.next_time - time.monotonic())
-        self.countdown_label.setText(f"Next key press in {remaining:0.1f} s")
+        self.sequence_running = False
+        
+        key = self.key1.text().strip().lower()
+        if not key:
+            return
+        
+        try:
+            press_key(key, self._append_log)
+            self._append_log(f"key1 2nd pressed: {key}")
+        except Exception as e:
+            self._append_log(f"key1 2nd press error: {e}")
 
-    # ------------------------------------------- global Start/Stop hotkey
-    def _poll_hotkey(self):
-        # Triggers at the moment the hotkey key is pressed while exactly the
-        # configured modifiers (Ctrl/Shift/Alt) are held down.
-        vk = KEYS[self.hotkey_box.currentText()][0]
-        down = is_key_down(vk)
-        if down and not self.hotkey_was_down and mods_down() == self._hotkey_mods():
-            self.toggle()
-        self.hotkey_was_down = down
+    def _press_key2(self):
+        if self.monitoring:
+            self.press_key2 = True
 
-    # ------------------------------------------------------------ Exit
+    def _press_key2_press(self):
+        if not self.monitoring:
+            return
+        
+        if not self.sequence_running:
+            return
+        
+        key = self.key2.text().strip().lower()
+        if not key:
+            return
+        
+        try:
+            press_key(key, self._append_log)
+            self._append_log(f"key2 pressed: {key}")
+        except Exception as e:
+            self._append_log(f"key2 press error: {e}")
+
+    def _press_key2_wait(self):
+        if self.monitoring:
+            self.press_key2 = True
+
     def closeEvent(self, event):
-        if self.running:
-            self.stop()
-        event.accept()
-
-
-def main():
-    app = QApplication(sys.argv)
-    win = MainWindow()
-    win.show()
-    sys.exit(app.exec())
+        if IS_WINDOWS:
+            try:
+                keyboard.unhook_all()
+            except Exception:
+                pass
+        super().closeEvent(event)
 
 
 if __name__ == "__main__":
-    main()
+    app = QApplication(sys.argv)
+    w = MainWindow()
+    w.show()
+    sys.exit(app.exec())
