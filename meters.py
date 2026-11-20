@@ -116,7 +116,7 @@ class WindowsMeter(BaseMeter):
             if hasattr(dev, "_dev"):
                 dev = dev._dev
         else:
-            dev = self._enumerator().GetDevice(self.device_id)
+            dev = self.__enumerator().GetDevice(self.device_id)
         iface = dev.Activate(IAudioMeterInformation._iid_, CLSCTX_ALL, None)
         self.meter = cast(iface, POINTER(IAudioMeterInformation))
 
