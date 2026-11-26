@@ -5,6 +5,9 @@ from dataclasses import dataclass
 # --------------------------------------------------------------------------
 @dataclass
 class Settings:
+    LEVEL_POLL_MS = 50
+    PRESS_RETRY_MS = 50
+
     KEY_LURE_DEFAULT = "9"
     KEY_LURE_TEXT_DEFAULT = "key_lure"
     KEY_FISHING_DEFAULT = "g"
@@ -25,7 +28,7 @@ class Settings:
 
     WAIT_LURE_MIN_DEFAULT = 2000
     WAIT_LURE_MAX_DEFAULT = 3000
-    WAIT_LURE_MIN = 0
+    WAIT_LURE_MIN = 100
     WAIT_LURE_MAX = 10000
     WAIT_LURE_STEP = 100
 
@@ -37,15 +40,21 @@ class Settings:
 
     WAIT_FISH_MIN_DEFAULT = 500
     WAIT_FISH_MAX_DEFAULT = 1000
-    WAIT_FISH_MIN = 0
+    WAIT_FISH_MIN = 100
     WAIT_FISH_MAX = 2000
     WAIT_FISH_STEP = 100
 
     WAIT_DELAY_MIN_DEFAULT = 500
     WAIT_DELAY_MAX_DEFAULT = 1000
-    WAIT_DELAY_MIN = 0
+    WAIT_DELAY_MIN = 100
     WAIT_DELAY_MAX = 2000
     WAIT_DELAY_STEP = 100
+
+    PRESSED_DURATION_MIN_DEFAULT = 50
+    PRESSED_DURATION_MAX_DEFAULT = 100
+    PRESSED_DURATION_MIN = 10
+    PRESSED_DURATION_MAX = 500
+    PRESSED_DURATION_STEP = 10
 
     key_lure: str = KEY_LURE_DEFAULT
     key_fishing: str = KEY_FISHING_DEFAULT
@@ -61,3 +70,5 @@ class Settings:
     wait_fish_max: int = WAIT_FISH_MAX_DEFAULT
     wait_delay_min: int = WAIT_DELAY_MIN_DEFAULT
     wait_delay_max: int = WAIT_DELAY_MAX_DEFAULT
+    pressed_duration_min: int = PRESSED_DURATION_MIN_DEFAULT
+    pressed_duration_max: int = PRESSED_DURATION_MAX_DEFAULT

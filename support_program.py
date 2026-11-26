@@ -19,7 +19,8 @@ from states import State, StateMachine
 
 IS_WINDOWS = sys.platform == "win32"
 
-LEVEL_POLL_MS = 50
+if IS_WINDOWS:
+    import keyboard
 
 # --------------------------------------------------------------------------
 # main implementation
@@ -33,7 +34,7 @@ class Main(MainWindow, StateMachine):
 
         self.level_timer = QTimer(self)
         self.level_timer.timeout.connect(self.pollLevel)
-        self.level_timer.start(LEVEL_POLL_MS)
+        self.level_timer.start(Settings.LEVEL_POLL_MS)
 
         self.refreshDevices()
         self.onStartKeyChange()
@@ -44,6 +45,32 @@ class Main(MainWindow, StateMachine):
         if self.state == State.WAIT_FOR_FISH and level >= self.settings.volume_threshold:
             self.appendLog(f"fish detected (level {level})")
             self.onFishDetected()
+
+    def pressKey(self, key: str):
+        if not key:
+            self.appendLog("press key: no key configured")
+            return
+        if self.state == State.IDLE:
+            return
+        if IS_WINDOWS and any(keyboard.is_pressed(m) for m in ("ctrl", "alt", "shift")):
+            QTimer.singleShot(Settings.PRESS_RETRY_MS, lambda: self.pressKey(key))
+            return
+        duration = self.randomMs(self.settings.pressed_duration_min, self.settings.pressed_duration_max)
+        self.appendLog(f"press key: {key} ({duration} ms)")
+        if IS_WINDOWS:
+            try:
+                keyboard.press(key)
+            except Exception as e:
+                self.appendLog(f"press key: could not press key '{key}': {e}")
+                return
+            # always release, even if stopped in the meantime, so the key is never stuck
+            QTimer.singleShot(duration, lambda: self.releaseKey(key))
+
+    def releaseKey(self, key: str):
+        try:
+            keyboard.release(key)
+        except Exception as e:
+            self.appendLog(f"press key: could not release key '{key}': {e}")
 
     # from MainWindow
     def onStartKey(self):
@@ -66,10 +93,12 @@ class Main(MainWindow, StateMachine):
                 self.appendLog("state: checking fishing lure")
             case State.APPLY_FISHING_LURE:
                 self.appendLog("state: applying fishing lure")
+                self.pressKey(self.settings.key_lure)
             case State.WAIT_FOR_LURE:
                 self.appendLog("state: waiting for fishing lure")
             case State.CAST_FISHING_POLE:
                 self.appendLog("state: casting fishing pole")
+                self.pressKey(self.settings.key_fishing)
             case State.WAIT_FOR_POLE:
                 self.appendLog("state: waiting for fishing pole")
             case State.WAIT_FOR_FISH:
@@ -78,6 +107,7 @@ class Main(MainWindow, StateMachine):
                 self.appendLog("state: waiting for delay")
             case State.REEL_FISH_IN:
                 self.appendLog("state: reeling fish in")
+                self.pressKey(self.settings.key_fishing)
             case State.WAIT_FOR_REEL:
                 self.appendLog("state: waiting for reel")
 

@@ -96,7 +96,8 @@ class Spin(QSpinBox):
 # --------------------------------------------------------------------------
 class MainWindow(QWidget):
     def __init__(self):
-        super().__init__()
+        # call QWidget directly: super() would also chain into StateMachine.__init__ (via Main's MRO)
+        QWidget.__init__(self)
         self.settings = Settings()
         self.capture_target = None
         self.startbutton_handle = None
@@ -264,6 +265,20 @@ class MainWindow(QWidget):
         self.delay_max = Spin(Settings.WAIT_DELAY_MAX_DEFAULT, Settings.WAIT_DELAY_MIN, Settings.WAIT_DELAY_MAX, Settings.WAIT_DELAY_STEP)
         grid_time.addWidget(self.delay_max, 4, 4)
 
+        pressed_lbl = QLabel("key pressed duration")
+        pressed_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        grid_time.addWidget(pressed_lbl, 5, 0)
+        pressed_min_lbl = QLabel("min")
+        pressed_min_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        grid_time.addWidget(pressed_min_lbl, 5, 1)
+        self.pressed_duration_min = Spin(Settings.PRESSED_DURATION_MIN_DEFAULT, Settings.PRESSED_DURATION_MIN, Settings.PRESSED_DURATION_MAX, Settings.PRESSED_DURATION_STEP)
+        grid_time.addWidget(self.pressed_duration_min, 5, 2)
+        pressed_max_lbl = QLabel("max")
+        pressed_max_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        grid_time.addWidget(pressed_max_lbl, 5, 3)
+        self.pressed_duration_max = Spin(Settings.PRESSED_DURATION_MAX_DEFAULT, Settings.PRESSED_DURATION_MIN, Settings.PRESSED_DURATION_MAX, Settings.PRESSED_DURATION_STEP)
+        grid_time.addWidget(self.pressed_duration_max, 5, 4)
+
         layout.addWidget(box_time)
 
         # control
@@ -323,6 +338,8 @@ class MainWindow(QWidget):
         self.fishing_max.setEnabled(enabled)
         self.delay_min.setEnabled(enabled)
         self.delay_max.setEnabled(enabled)
+        self.pressed_duration_min.setEnabled(enabled)
+        self.pressed_duration_max.setEnabled(enabled)
         if change_start:
             self.btn_start.setEnabled(enabled)
 
@@ -411,6 +428,8 @@ class MainWindow(QWidget):
         self.settings.wait_fish_max = self.fishing_max.value()
         self.settings.wait_delay_min = self.delay_min.value()
         self.settings.wait_delay_max = self.delay_max.value()
+        self.settings.pressed_duration_min = self.pressed_duration_min.value()
+        self.settings.pressed_duration_max = self.pressed_duration_max.value()
 
     def appendLog(self, text):
         self.log_view.appendPlainText(f"{time.strftime('%H:%M:%S')}  {text}")
