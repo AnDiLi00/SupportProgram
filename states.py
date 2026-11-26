@@ -27,10 +27,10 @@ class State(Enum):
 # --------------------------------------------------------------------------
 # state machine implementation
 # --------------------------------------------------------------------------
-class StateMachine:
+class StateMachine():
     def __init__(self):
         self.state = State.IDLE
-        self.settings = Settings()
+        self.state_settings = Settings()
         self.pending = []
         
         self.timer1 = QTimer(self)
@@ -47,15 +47,12 @@ class StateMachine:
 
     def start(self, settings: Settings): 
         if self.state == State.IDLE:
-            self.settings = settings
+            self.state_settings = settings
             self.setState(State.CHECK_FISHING_LURE)
 
     def stop(self): 
         if self.state != State.IDLE:
             self.setState(State.IDLE)
-
-    def getState(self) -> State:
-        return self.state
 
     def setState(self, new_state: State):
         if new_state == self.state:
@@ -80,34 +77,34 @@ class StateMachine:
                 else:
                     self.setState(State.CAST_FISHING_POLE)
             case State.APPLY_FISHING_LURE:
-                lo_lure, hi_lure = sorted((self.settings.wait_lure_duration_min, self.settings.wait_lure_duration_max))
+                lo_lure, hi_lure = sorted((self.state_settings.wait_lure_duration_min, self.state_settings.wait_lure_duration_max))
                 self.timer_lure.stop()
                 self.timer_lure.start(int(random.uniform(lo_lure, hi_lure)))
                 self.lure = True
                 self.setState(State.WAIT_FOR_LURE)
             case State.WAIT_FOR_LURE:
-                lo1, hi1 = sorted((self.settings.wait_lure_min, self.settings.wait_lure_max))
+                lo1, hi1 = sorted((self.state_settings.wait_lure_min, self.state_settings.wait_lure_max))
                 self.timer1.stop()
                 self.timer1.start(int(random.uniform(lo1, hi1)))
             case State.CAST_FISHING_POLE:
                 self.setState(State.WAIT_FOR_POLE)
             case State.WAIT_FOR_POLE:
-                lo1, hi1 = sorted((self.settings.wait_cast_min, self.settings.wait_cast_max))
+                lo1, hi1 = sorted((self.state_settings.wait_cast_min, self.state_settings.wait_cast_max))
                 self.timer1.stop()
                 self.timer1.start(int(random.uniform(lo1, hi1)))
-                lo2, hi2 = sorted((self.settings.wait_fish_min, self.settings.wait_fish_max))
+                lo2, hi2 = sorted((self.state_settings.wait_fish_min, self.state_settings.wait_fish_max))
                 self.timer2.stop()
                 self.timer2.start(int(random.uniform(lo2, hi2)))
             case State.WAIT_FOR_FISH:
                 pass
             case State.WAIT_FOR_DELAY:
-                lo1, hi1 = sorted((self.settings.wait_delay_min, self.settings.wait_delay_max))
+                lo1, hi1 = sorted((self.state_settings.wait_delay_min, self.state_settings.wait_delay_max))
                 self.timer1.stop()
                 self.timer1.start(int(random.uniform(lo1, hi1)))
             case State.REEL_FISH_IN:
                 self.setState(State.WAIT_FOR_REEL)
             case State.WAIT_FOR_REEL:
-                lo1, hi1 = sorted((self.settings.wait_reel_min, self.settings.wait_reel_max))
+                lo1, hi1 = sorted((self.state_settings.wait_reel_min, self.state_settings.wait_reel_max))
                 self.timer1.stop()
                 self.timer1.start(int(random.uniform(lo1, hi1)))
             

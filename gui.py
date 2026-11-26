@@ -3,10 +3,9 @@ import sys
 import threading
 import time
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
-    QApplication,
     QComboBox,
     QGridLayout,
     QGroupBox,
@@ -127,7 +126,7 @@ class MainWindow(QWidget):
         self.threshold_slider.setValue(Settings.THRESHOLD_DEFAULT)
         grid_devices.addWidget(self.threshold_slider, 5, 0)
 
-        self.threshold_spin = Spin(Settings.THRESHOLD_DEFAULT, Settings.THRESHOLD_MIN, Settings.THRESHOLD_MAX, Settings.THRESHOLD_STEP, "%")
+        self.threshold_spin = Spin(Settings.THRESHOLD_DEFAULT, Settings.THRESHOLD_MIN, Settings.THRESHOLD_MAX, Settings.THRESHOLD_STEP)
         grid_devices.addWidget(self.threshold_spin, 5, 1)
 
         self.threshold_slider.valueChanged.connect(self.threshold_spin.setValue)
@@ -171,7 +170,7 @@ class MainWindow(QWidget):
         layout.addWidget(box_keys)
 
         # timing
-        box_time = QGroupBox("timing [in ms]")
+        box_time = QGroupBox("timing [ms]")
         grid_time = QGridLayout(box_time)
 
         lure_duration_lbl = QLabel("lure duration")
@@ -295,8 +294,8 @@ class MainWindow(QWidget):
         self.key_start_btn.setEnabled(enabled)
         self.lure_duration_min.setEnabled(enabled)
         self.lure_duration_max.setEnabled(enabled)
-        self.lure_min.setEnabled(enabled)
-        self.lure_max.setEnabled(enabled)
+        self.lure_cast_min.setEnabled(enabled)
+        self.lure_cast_max.setEnabled(enabled)
         self.fishing_duration_min.setEnabled(enabled)
         self.fishing_duration_max.setEnabled(enabled)
         self.fishing_min.setEnabled(enabled)
@@ -319,7 +318,7 @@ class MainWindow(QWidget):
         if IS_WINDOWS:
             def worker():
                 name = keyboard.read_hotkey(suppress=False)
-                self.bridge.key_captured.emit(target, name)
+                self.bridge.onKeyCaptured.emit(target, name)
 
             threading.Thread(target=worker, daemon=True).start()
         else:
@@ -348,7 +347,7 @@ class MainWindow(QWidget):
             except Exception:
                 pass
             self.startbutton_handle = None
-        key = self.toggle.text().strip().lower()
+        key = self.key_start.text().strip().lower()
         if not key:
             return
         try:
@@ -358,6 +357,22 @@ class MainWindow(QWidget):
     
     def onStartKey(self):
         raise NotImplementedError()
+
+    def storeSettings(self):
+        self.settings.key_lure = self.key_lure.text().strip().lower()
+        self.settings.key_fishing = self.key_fishing.text().strip().lower()
+        self.settings.key_start = self.key_start.text().strip().lower()
+        self.settings.volume_threshold = self.threshold_spin.value()
+        self.settings.wait_lure_duration_min = self.lure_duration_min.value()
+        self.settings.wait_lure_duration_max = self.lure_duration_max.value()
+        self.settings.wait_lure_min = self.lure_min.value()
+        self.settings.wait_lure_max = self.lure_max.value()
+        self.settings.wait_fish_duration_min = self.fishing_duration_min.value()
+        self.settings.wait_fish_duration_max = self.fishing_duration_max.value()
+        self.settings.wait_fish_min = self.fishing_min.value()
+        self.settings.wait_fish_max = self.fishing_max.value()
+        self.settings.wait_delay_min = self.delay_min.value()
+        self.settings.wait_delay_max = self.delay_max.value()
 
     def appendLog(self, text):
         self.log_view.appendPlainText(f"{time.strftime('%H:%M:%S')}  {text}")
