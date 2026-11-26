@@ -25,7 +25,7 @@ class State(Enum):
 # state machine implementation (mixin: the host class must be a QObject)
 # --------------------------------------------------------------------------
 class StateMachine:
-    def __init__(self):
+    def initStateMachine(self):
         self.state = State.IDLE
         self.state_settings = Settings()
         self.pending = []

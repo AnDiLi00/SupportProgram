@@ -27,7 +27,7 @@ LEVEL_POLL_MS = 50
 class Main(MainWindow, StateMachine):
     def __init__(self):
         MainWindow.__init__(self)
-        StateMachine.__init__(self)
+        self.initStateMachine()
         self.setWindowTitle("support program")
         self.setMinimumWidth(500)
 
