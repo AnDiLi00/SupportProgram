@@ -29,7 +29,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSlider,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -40,6 +39,7 @@ if IS_WINDOWS:
 from gui import VolumeBar, Spin
 from meters import Meter
 from states import State
+from settings import Settings
 
 # --------------------------------------------------------------------------
 # key 
@@ -84,7 +84,7 @@ class Bridge(QObject):
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("support program")
+        self.setWindowTitle("program")
         self.setMinimumWidth(500)
 
         self.meter = Meter()
@@ -184,7 +184,7 @@ class MainWindow(QWidget):
         layout.addWidget(box_devices)
 
         # keys
-        box_keys = QGroupBox("keys (modifiers like ctrl+alt+shift are supported)")
+        box_keys = QGroupBox("keys [modifiers like ctrl+alt+shift are supported]")
         grid_keys = QGridLayout(box_keys)
 
         lbl_key1 = QLabel("key1")
@@ -224,7 +224,7 @@ class MainWindow(QWidget):
         layout.addWidget(box_keys)
 
         # timing
-        box_time = QGroupBox("timing (ms)")
+        box_time = QGroupBox("timing")
         grid_time = QGridLayout(box_time)
 
         lbl_delay = QLabel("key press delay")

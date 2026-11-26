@@ -1,19 +1,19 @@
-import sys
-
-IS_WINDOWS = sys.platform == "win32"
-
+import comtypes
 import math
 import random
+import sys
 import time
+    
+from comtypes import CLSCTX_ALL
+from ctypes import POINTER, cast
+from pycaw.api.mmdeviceapi import IMMDeviceEnumerator
+from pycaw.constants import CLSID_MMDeviceEnumerator, DEVICE_STATE, EDataFlow
+from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
+from pycaw.utils import CLSID_MMDeviceEnumerator
 
-if IS_WINDOWS:
-    import comtypes
-    from comtypes import CLSCTX_ALL
-    from ctypes import POINTER, cast
-    from pycaw.api.mmdeviceapi import IMMDeviceEnumerator
-    from pycaw.constants import CLSID_MMDeviceEnumerator, DEVICE_STATE, EDataFlow
-    from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
-    from pycaw.utils import CLSID_MMDeviceEnumerator
+from settings import Settings
+
+IS_WINDOWS = sys.platform == "win32"
 
 # --------------------------------------------------------------------------
 # meter implementation
@@ -21,24 +21,24 @@ if IS_WINDOWS:
 class Meter:
     def __init__(self):
         if IS_WINDOWS:
-            self._impl = WindowsMeter()
+            self.implemented = WindowsMeter()
         else:
-            self._impl = SimulatedMeter()
+            self.implemented = SimulatedMeter()
 
-    def list_devices(self):
-        return self._impl.list_devices()
+    def listDevices(self):
+        return self.implemented.listDevices()
 
     def select(self, device_id):
-        self._impl.select(device_id)
+        self.implemented.select(device_id)
 
     def level(self):
-        return self._impl.level()
+        return self.implemented.level()
 
 # --------------------------------------------------------------------------
 # base meter implementation
 # --------------------------------------------------------------------------
 class BaseMeter:
-    def list_devices(self):
+    def listDevices(self):
         raise NotImplementedError()
 
     def select(self, device_id):
@@ -55,7 +55,7 @@ class SimulatedMeter(BaseMeter):
         self.device_id = None
         self.time_created = time.monotonic()
 
-    def list_devices(self):
+    def listDevices(self):
         return [("sim1", "simulated speakers"), ("sim2", "simulated headphones")]
 
     def select(self, device_id):
@@ -64,9 +64,10 @@ class SimulatedMeter(BaseMeter):
     def level(self) -> int:
         time_elapsed = time.monotonic() - self.time_created
 
+        half_range = abs(Settings.THRESHOLD_MAX - Settings.THRESHOLD_MIN) / 2
         phase = 0.0 if self.device_id != "sim2" else 1.5
-        value = 50 + 50 * math.sin(time_elapsed * 1.2 + phase) + random.uniform(-5, 5)
-        return max(0, min(100, int(value)))
+        value = half_range + half_range * math.sin(time_elapsed * 1.2 + phase) + random.uniform(-5, 5)
+        return max(Settings.THRESHOLD_MIN, min(Settings.THRESHOLD_MAX, int(value)))
 
 # --------------------------------------------------------------------------
 # windows meter implementation
@@ -75,10 +76,10 @@ class WindowsMeter(BaseMeter):
     def __init__(self):
         self.device_id = None
         self.meter = None
-        self._last_retry = 0.0
-        self.__connect()
+        self.last_retry = 0.0
+        self.connect()
 
-    def list_devices(self):
+    def listDevices(self):
         names = {}
         try:
             for device in AudioUtilities.GetAllDevices():
@@ -86,7 +87,7 @@ class WindowsMeter(BaseMeter):
         except Exception:
             pass
         result = []
-        collection = self.__enumerator().EnumAudioEndpoints(EDataFlow.eRender.value, DEVICE_STATE.ACTIVE.value)
+        collection = self.enumerator().EnumAudioEndpoints(EDataFlow.eRender.value, DEVICE_STATE.ACTIVE.value)
         for item in range(collection.GetCount()):
             device = collection.Item(item)
             device_id = device.GetId()
@@ -95,30 +96,30 @@ class WindowsMeter(BaseMeter):
 
     def select(self, device_id):
         self.device_id = device_id
-        self.__connect()
+        self.connect()
 
     def level(self) -> int:
         try:
             return int(round(self.meter.GetPeakValue() * 100))
         except Exception:
             now = time.monotonic()
-            if now - self._last_retry > 1.0:
-                self._last_retry = now
+            if now - self.last_retry > 1.0:
+                self.last_retry = now
                 try:
-                    self.__connect()
+                    self.connect()
                 except Exception:
                     pass
             return 0
 
-    def __connect(self):
+    def connect(self):
         if self.device_id is None:
             dev = AudioUtilities.GetSpeakers()
             if hasattr(dev, "_dev"):
                 dev = dev._dev
         else:
-            dev = self.__enumerator().GetDevice(self.device_id)
+            dev = self.enumerator().GetDevice(self.device_id)
         iface = dev.Activate(IAudioMeterInformation._iid_, CLSCTX_ALL, None)
         self.meter = cast(iface, POINTER(IAudioMeterInformation))
 
-    def __enumerator(self):
+    def enumerator(self):
         return comtypes.CoCreateInstance(CLSID_MMDeviceEnumerator, IMMDeviceEnumerator, comtypes.CLSCTX_INPROC_SERVER)
