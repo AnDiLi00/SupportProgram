@@ -2,9 +2,9 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Build & Sign EXE",
+      "label": "Build EXE",
       "type": "shell",
-      "command": "${workspaceFolder}\\.venv\\Scripts\\pyinstaller.exe --onefile dein_skript.py; & 'C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.22621.0\\x64\\signtool.exe' sign /n 'MeinZertifikat' /fd SHA256 /tr http://digicert.com /td SHA256 dist\\dein_skript.exe",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe -m PyInstaller --noconfirm --onefile --windowed --icon support_program.ico --add-data=support_program.ico:. support_program.py",
       "group": {
         "kind": "build",
         "isDefault": true
