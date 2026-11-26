@@ -1,19 +1,19 @@
-import comtypes
 import math
 import random
 import sys
 import time
-    
-from comtypes import CLSCTX_ALL
-from ctypes import POINTER, cast
-from pycaw.api.mmdeviceapi import IMMDeviceEnumerator
-from pycaw.constants import CLSID_MMDeviceEnumerator, DEVICE_STATE, EDataFlow
-from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
-from pycaw.utils import CLSID_MMDeviceEnumerator
 
 from settings import Settings
 
 IS_WINDOWS = sys.platform == "win32"
+
+if IS_WINDOWS:
+    import comtypes
+    from comtypes import CLSCTX_ALL
+    from ctypes import POINTER, cast
+    from pycaw.api.mmdeviceapi import IMMDeviceEnumerator
+    from pycaw.constants import CLSID_MMDeviceEnumerator, DEVICE_STATE, EDataFlow
+    from pycaw.pycaw import AudioUtilities, IAudioMeterInformation
 
 # --------------------------------------------------------------------------
 # meter implementation
@@ -77,7 +77,10 @@ class WindowsMeter(BaseMeter):
         self.device_id = None
         self.meter = None
         self.last_retry = 0.0
-        self.connect()
+        try:
+            self.connect()
+        except Exception:
+            pass
 
     def listDevices(self):
         names = {}

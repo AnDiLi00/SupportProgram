@@ -1,12 +1,9 @@
-import sys
-
-IS_WINDOWS = sys.platform == "win32"
-
 import random
+
+from enum import Enum, auto
 
 from PySide6.QtCore import QTimer
 
-from enum import Enum, auto
 from settings import Settings
 
 # --------------------------------------------------------------------------
@@ -25,34 +22,38 @@ class State(Enum):
     WAIT_FOR_REEL = auto()
 
 # --------------------------------------------------------------------------
-# state machine implementation
+# state machine implementation (mixin: the host class must be a QObject)
 # --------------------------------------------------------------------------
-class StateMachine():
+class StateMachine:
     def __init__(self):
         self.state = State.IDLE
         self.state_settings = Settings()
         self.pending = []
-        
+
         self.timer1 = QTimer(self)
         self.timer1.setSingleShot(True)
-        self.timer1.timeout.connect(self.onTimer)
+        self.timer1.timeout.connect(self.onTimer1)
         self.timer2 = QTimer(self)
         self.timer2.setSingleShot(True)
-        self.timer2.timeout.connect(self.onTimer)
+        self.timer2.timeout.connect(self.onTimer2)
 
         self.timer_lure = QTimer(self)
         self.timer_lure.setSingleShot(True)
-        self.timer_lure.timeout.connect(self.onTimer)
+        self.timer_lure.timeout.connect(self.onTimerLure)
         self.lure = False
 
-    def start(self, settings: Settings): 
+    def start(self, settings: Settings):
         if self.state == State.IDLE:
             self.state_settings = settings
             self.setState(State.CHECK_FISHING_LURE)
 
-    def stop(self): 
+    def stop(self):
         if self.state != State.IDLE:
             self.setState(State.IDLE)
+
+    def onFishDetected(self):
+        if self.state == State.WAIT_FOR_FISH:
+            self.setState(State.WAIT_FOR_DELAY)
 
     def setState(self, new_state: State):
         if new_state == self.state:
@@ -66,7 +67,13 @@ class StateMachine():
             new, previous = self.pending.pop(0)
             self.onStateChange(new, previous)
 
+    @staticmethod
+    def randomMs(a: int, b: int) -> int:
+        lo, hi = sorted((a, b))
+        return int(random.uniform(lo, hi))
+
     def onSetState(self):
+        s = self.state_settings
         match self.state:
             case State.IDLE:
                 self.timer1.stop()
@@ -77,73 +84,50 @@ class StateMachine():
                 else:
                     self.setState(State.CAST_FISHING_POLE)
             case State.APPLY_FISHING_LURE:
-                lo_lure, hi_lure = sorted((self.state_settings.wait_lure_duration_min, self.state_settings.wait_lure_duration_max))
                 self.timer_lure.stop()
-                self.timer_lure.start(int(random.uniform(lo_lure, hi_lure)))
+                self.timer_lure.start(self.randomMs(s.wait_lure_duration_min, s.wait_lure_duration_max))
                 self.lure = True
                 self.setState(State.WAIT_FOR_LURE)
             case State.WAIT_FOR_LURE:
-                lo1, hi1 = sorted((self.state_settings.wait_lure_min, self.state_settings.wait_lure_max))
                 self.timer1.stop()
-                self.timer1.start(int(random.uniform(lo1, hi1)))
+                self.timer1.start(self.randomMs(s.wait_lure_min, s.wait_lure_max))
             case State.CAST_FISHING_POLE:
                 self.setState(State.WAIT_FOR_POLE)
             case State.WAIT_FOR_POLE:
-                lo1, hi1 = sorted((self.state_settings.wait_cast_min, self.state_settings.wait_cast_max))
                 self.timer1.stop()
-                self.timer1.start(int(random.uniform(lo1, hi1)))
-                lo2, hi2 = sorted((self.state_settings.wait_fish_min, self.state_settings.wait_fish_max))
+                self.timer1.start(self.randomMs(s.wait_fish_min, s.wait_fish_max))
                 self.timer2.stop()
-                self.timer2.start(int(random.uniform(lo2, hi2)))
+                self.timer2.start(self.randomMs(s.wait_fish_duration_min, s.wait_fish_duration_max))
             case State.WAIT_FOR_FISH:
                 pass
             case State.WAIT_FOR_DELAY:
-                lo1, hi1 = sorted((self.state_settings.wait_delay_min, self.state_settings.wait_delay_max))
+                self.timer2.stop()
                 self.timer1.stop()
-                self.timer1.start(int(random.uniform(lo1, hi1)))
+                self.timer1.start(self.randomMs(s.wait_delay_min, s.wait_delay_max))
             case State.REEL_FISH_IN:
                 self.setState(State.WAIT_FOR_REEL)
             case State.WAIT_FOR_REEL:
-                lo1, hi1 = sorted((self.state_settings.wait_reel_min, self.state_settings.wait_reel_max))
+                # the same "casting / reel in time" setting is used for the reel
                 self.timer1.stop()
-                self.timer1.start(int(random.uniform(lo1, hi1)))
-            
-    def onTimer(self):
-        match self.state:
-            case State.IDLE:
-                pass
-            case State.CHECK_FISHING_LURE:
-                pass
-            case State.APPLY_FISHING_LURE:
-                pass
-            case State.WAIT_FOR_LURE:
-                match self.sender():
-                    case self.timer1:
-                        self.setState(State.CAST_FISHING_POLE)
-            case State.CAST_FISHING_POLE:
-                pass
-            case State.WAIT_FOR_POLE:
-                match self.sender():
-                    case self.timer1:
-                        self.setState(State.WAIT_FOR_FISH)
-            case State.WAIT_FOR_FISH:
-                match self.sender():
-                    case self.timer2:
-                        self.setState(State.WAIT_FOR_DELAY)
-            case State.WAIT_FOR_DELAY:
-                match self.sender():
-                    case self.timer1:
-                        self.setState(State.REEL_FISH_IN)
-            case State.REEL_FISH_IN:
-                pass
-            case State.WAIT_FOR_REEL:
-                match self.sender():
-                    case self.timer1:
-                        self.setState(State.CHECK_FISHING_LURE)
+                self.timer1.start(self.randomMs(s.wait_fish_min, s.wait_fish_max))
 
-        if self.sender() == self.timer_lure:
-            self.timer_lure.stop()
-            self.lure = False
+    def onTimer1(self):
+        match self.state:
+            case State.WAIT_FOR_LURE:
+                self.setState(State.CAST_FISHING_POLE)
+            case State.WAIT_FOR_POLE:
+                self.setState(State.WAIT_FOR_FISH)
+            case State.WAIT_FOR_DELAY:
+                self.setState(State.REEL_FISH_IN)
+            case State.WAIT_FOR_REEL:
+                self.setState(State.CHECK_FISHING_LURE)
+
+    def onTimer2(self):
+        if self.state in (State.WAIT_FOR_POLE, State.WAIT_FOR_FISH):
+            self.setState(State.WAIT_FOR_DELAY)
+
+    def onTimerLure(self):
+        self.lure = False
 
     def onStateChange(self, new_state: State, previous_state: State):
         raise NotImplementedError()

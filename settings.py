@@ -1,8 +1,4 @@
-import sys
-
 from dataclasses import dataclass
-
-IS_WINDOWS = sys.platform == "win32"
 
 # --------------------------------------------------------------------------
 # settings implementation
@@ -51,33 +47,17 @@ class Settings:
     WAIT_DELAY_MAX = 2000
     WAIT_DELAY_STEP = 100
 
-    key_lure: str
-    key_fishing: str
-    key_start: str
-    volume_threshold: int
-    wait_lure_duration_min: int
-    wait_lure_duration_max: int
-    wait_lure_min: int
-    wait_lure_max: int
-    wait_fish_duration_min: int
-    wait_fish_duration_max: int
-    wait_fish_min: int
-    wait_fish_max: int
-    wait_delay_min: int
-    wait_delay_max: int
-
-    def __post_init__(self):
-        self.key_lure = self.KEY_LURE_DEFAULT
-        self.key_fishing = self.KEY_FISHING_DEFAULT
-        self.key_start = self.KEY_START_DEFAULT
-        self.volume_threshold = self.THRESHOLD_DEFAULT
-        self.wait_lure_duration_min = self.WAIT_LURE_DURATION_MIN_DEFAULT
-        self.wait_lure_duration_max = self.WAIT_LURE_DURATION_MAX_DEFAULT
-        self.wait_lure_min = self.WAIT_LURE_MIN_DEFAULT
-        self.wait_lure_max = self.WAIT_LURE_MAX_DEFAULT
-        self.wait_fish_duration_min = self.WAIT_FISH_DURATION_MIN_DEFAULT
-        self.wait_fish_duration_max = self.WAIT_FISH_DURATION_MAX_DEFAULT
-        self.wait_fish_min = self.WAIT_FISH_MIN_DEFAULT
-        self.wait_fish_max = self.WAIT_FISH_MAX_DEFAULT
-        self.wait_delay_min = self.WAIT_DELAY_MIN_DEFAULT
-        self.wait_delay_max = self.WAIT_DELAY_MAX_DEFAULT
+    key_lure: str = KEY_LURE_DEFAULT
+    key_fishing: str = KEY_FISHING_DEFAULT
+    key_start: str = KEY_START_DEFAULT
+    volume_threshold: int = THRESHOLD_DEFAULT
+    wait_lure_duration_min: int = WAIT_LURE_DURATION_MIN_DEFAULT
+    wait_lure_duration_max: int = WAIT_LURE_DURATION_MAX_DEFAULT
+    wait_lure_min: int = WAIT_LURE_MIN_DEFAULT
+    wait_lure_max: int = WAIT_LURE_MAX_DEFAULT
+    wait_fish_duration_min: int = WAIT_FISH_DURATION_MIN_DEFAULT
+    wait_fish_duration_max: int = WAIT_FISH_DURATION_MAX_DEFAULT
+    wait_fish_min: int = WAIT_FISH_MIN_DEFAULT
+    wait_fish_max: int = WAIT_FISH_MAX_DEFAULT
+    wait_delay_min: int = WAIT_DELAY_MIN_DEFAULT
+    wait_delay_max: int = WAIT_DELAY_MAX_DEFAULT

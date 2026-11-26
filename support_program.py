@@ -10,33 +10,52 @@ run:                python support_program.py
 """
 import sys
 
-import random
-import threading
-import time
-
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from gui import MainWindow
+from settings import Settings
 from states import State, StateMachine
 
 IS_WINDOWS = sys.platform == "win32"
+
+LEVEL_POLL_MS = 50
 
 # --------------------------------------------------------------------------
 # main implementation
 # --------------------------------------------------------------------------
 class Main(MainWindow, StateMachine):
     def __init__(self):
-        self.setWindowTitle("amd program")
+        MainWindow.__init__(self)
+        StateMachine.__init__(self)
+        self.setWindowTitle("support program")
         self.setMinimumWidth(500)
-        super().__init__()
+
+        self.level_timer = QTimer(self)
+        self.level_timer.timeout.connect(self.pollLevel)
+        self.level_timer.start(LEVEL_POLL_MS)
+
+        self.refreshDevices()
+        self.onStartKeyChange()
+
+    def pollLevel(self):
+        level = self.meter.level()
+        self.volume_bar.setValue(level)
+        if self.state == State.WAIT_FOR_FISH and level >= self.settings.volume_threshold:
+            self.appendLog(f"fish detected (level {level})")
+            self.onFishDetected()
 
     # from MainWindow
     def onStartKey(self):
         if self.state == State.IDLE:
-            self.storeSettings
+            self.storeSettings()
+            self.changeActiveFlag(False, False)
+            self.btn_start.setText("stop")
             self.start(self.settings)
         else:
             self.stop()
+            self.btn_start.setText("start")
+            self.changeActiveFlag(True, False)
 
     # from StateMachine
     def onStateChange(self, new_state: State, previous_state: State):

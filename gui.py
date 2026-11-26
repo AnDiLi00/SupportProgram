@@ -1,10 +1,14 @@
-import keyboard
 import sys
 import threading
 import time
 
+IS_WINDOWS = sys.platform == "win32"
+
+if IS_WINDOWS:
+    import keyboard
+
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPen
+from PySide6.QtGui import QColor, QKeySequence, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
     QComboBox,
     QGridLayout,
@@ -23,7 +27,23 @@ from PySide6.QtWidgets import (
 from meters import Meter
 from settings import Settings
 
-IS_WINDOWS = sys.platform == "win32"
+# --------------------------------------------------------------------------
+# key event helper (used on non-windows, where keyboard.read_hotkey is not used)
+# --------------------------------------------------------------------------
+def key_event_to_name(event):
+    key = event.key()
+    if key in (Qt.Key_Control, Qt.Key_Shift, Qt.Key_Alt, Qt.Key_Meta):
+        return None  # modifier alone: keep waiting for the real key
+    mods = event.modifiers()
+    parts = []
+    if mods & Qt.ControlModifier:
+        parts.append("ctrl")
+    if mods & Qt.AltModifier:
+        parts.append("alt")
+    if mods & Qt.ShiftModifier:
+        parts.append("shift")
+    parts.append(QKeySequence(key).toString().lower())
+    return "+".join(parts)
 
 # --------------------------------------------------------------------------
 # bridge for cross-thread communication 
@@ -50,9 +70,9 @@ class VolumeBar(QProgressBar):
 
     def paintEvent(self, event: QPaintEvent):
         super().paintEvent(event)
-        range = abs(Settings.THRESHOLD_MAX - Settings.THRESHOLD_MIN)
+        span = abs(Settings.THRESHOLD_MAX - Settings.THRESHOLD_MIN)
         w = self.width()
-        x = 1 + round(self.threshold / range * (w - 2))
+        x = 1 + round(self.threshold / span * (w - 2))
         x = max(1, min(w - 2, x))
         p = QPainter(self)
         pen = QPen(QColor("#ff3030"))
@@ -75,18 +95,19 @@ class Spin(QSpinBox):
 # main window implementation
 # --------------------------------------------------------------------------
 class MainWindow(QWidget):
-    def __init__(self, settings: Settings):
+    def __init__(self):
         super().__init__()
-        self.settings = settings
-        self.capture_device = None
+        self.settings = Settings()
+        self.capture_target = None
         self.startbutton_handle = None
         self.meter = Meter()
         self.bridge = Bridge()
         self.bridge.onStartKey.connect(self.onStartKey)
-        self.bridge.onKeyCaptured.connect(self.onKeyCaptured)        
+        self.bridge.onKeyCaptured.connect(self.onKeyCaptured)
         self.createUI()
 
     def createUI(self):
+        self.setFocusPolicy(Qt.StrongFocus)
         layout = QVBoxLayout(self)
 
         # sound
@@ -272,7 +293,7 @@ class MainWindow(QWidget):
         self.device_list.clear()
         self.device_list.addItem("default output device", None)
         try:
-            for dev_id, name in self.meter.list_devices():
+            for dev_id, name in self.meter.listDevices():
                 self.device_list.addItem(name, dev_id)
         except Exception as e:
             self.appendLog(f"could not list output devices: {e}")
@@ -316,6 +337,9 @@ class MainWindow(QWidget):
         self.changeActiveFlag(False, True)
 
         if IS_WINDOWS:
+            # the old start hotkey must not fire while a key is being recorded
+            self.removeStartHotkey()
+
             def worker():
                 name = keyboard.read_hotkey(suppress=False)
                 self.bridge.onKeyCaptured.emit(target, name)
@@ -324,6 +348,15 @@ class MainWindow(QWidget):
         else:
             self.capture_target = target
             self.setFocus()
+
+    def keyPressEvent(self, event):
+        if self.capture_target is not None:
+            name = key_event_to_name(event)
+            if name:
+                target, self.capture_target = self.capture_target, None
+                self.bridge.onKeyCaptured.emit(target, name)
+            return
+        super().keyPressEvent(event)
 
     def onKeyCaptured(self, target: str, name: str):
         match target:
@@ -337,16 +370,21 @@ class MainWindow(QWidget):
                 self.key_start.setText(name)
                 self.key_start_btn.setText("record")
         self.changeActiveFlag(True, True)
+        # setText does not emit editingFinished, and the hotkey was removed while recording
+        self.onStartKeyChange()
 
-    def onStartKeyChange(self):
-        if not IS_WINDOWS:
-            return
+    def removeStartHotkey(self):
         if self.startbutton_handle is not None:
             try:
                 keyboard.remove_hotkey(self.startbutton_handle)
             except Exception:
                 pass
             self.startbutton_handle = None
+
+    def onStartKeyChange(self):
+        if not IS_WINDOWS:
+            return
+        self.removeStartHotkey()
         key = self.key_start.text().strip().lower()
         if not key:
             return
@@ -365,8 +403,8 @@ class MainWindow(QWidget):
         self.settings.volume_threshold = self.threshold_spin.value()
         self.settings.wait_lure_duration_min = self.lure_duration_min.value()
         self.settings.wait_lure_duration_max = self.lure_duration_max.value()
-        self.settings.wait_lure_min = self.lure_min.value()
-        self.settings.wait_lure_max = self.lure_max.value()
+        self.settings.wait_lure_min = self.lure_cast_min.value()
+        self.settings.wait_lure_max = self.lure_cast_max.value()
         self.settings.wait_fish_duration_min = self.fishing_duration_min.value()
         self.settings.wait_fish_duration_max = self.fishing_duration_max.value()
         self.settings.wait_fish_min = self.fishing_min.value()
